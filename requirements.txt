@@ -11,3 +11,4 @@ xformers
 tensorboard
 av
 kornia
+torch

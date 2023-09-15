@@ -14,6 +14,7 @@ from util import *
 import torchvision.transforms as T
 
 
+
 def get_timesteps(scheduler, num_inference_steps, strength, device):
     # get the original timestep using init_timestep
     init_timestep = min(int(num_inference_steps * strength), num_inference_steps)
@@ -55,7 +56,7 @@ class Preprocess(nn.Module):
                                                           torch_dtype=torch.float16).to(self.device)
         self.unet = UNet2DConditionModel.from_pretrained(model_key, subfolder="unet", revision="fp16",
                                                    torch_dtype=torch.float16).to(self.device)
-        self.paths, self.frames, self.latents = self.get_data(opt.data_path, opt.n_frames)
+        self.paths, self.frames, self.latents = self.get_data(opt.data_path)
         
         if self.sd_version == 'ControlNet':
             from diffusers import ControlNetModel, StableDiffusionControlNetPipeline
@@ -69,6 +70,12 @@ class Preprocess(nn.Module):
         elif self.sd_version == 'depth':
             self.depth_maps = self.prepare_depth_maps()
         self.scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler")
+        
+        if opt.inversion_prompt:
+            self.inversion_prompt = opt.inversion_prompt
+        else:
+            self.inversion_prompt = generate_caption(self.frames[0])
+        print(f'[INFO] Caption: {self.inversion_prompt}')
         
         # self.unet.enable_xformers_memory_efficient_attention()
         print(f'[INFO] loaded stable diffusion!')
@@ -181,15 +188,22 @@ class Preprocess(nn.Module):
         latents = torch.cat(latents)
         return latents
 
-    def get_data(self, frames_path, n_frames):
+    def get_data(self, frames_path):
         # load frames
-        paths =  [f"{frames_path}/%05d.png" % i for i in range(n_frames)]
-        if not os.path.exists(paths[0]):
-            paths = [f"{frames_path}/%05d.jpg" % i for i in range(n_frames)]
+        ext = 'png'
+        first_frame = f"{frames_path}/%05d.png" % 0
+        if not os.path.exists(first_frame):
+            ext = 'jpg'
+            
+        paths = []
+        for i in range(100000):
+            path = f"{frames_path}/%05d.{ext}" % i
+            if not os.path.exists(path):
+                break
+            paths.append(path)
         self.paths = paths
+        
         frames = [Image.open(path).convert('RGB') for path in paths]
-        if frames[0].size[0] == frames[0].size[1]:
-            frames = [frame.resize((512, 512), resample=Image.Resampling.LANCZOS) for frame in frames]
         frames = torch.stack([T.ToTensor()(frame) for frame in frames]).to(torch.float16).to(self.device)
         # encode to latents
         latents = self.encode_imgs(frames, deterministic=True).to(torch.float16).to(self.device)
@@ -265,10 +279,9 @@ class Preprocess(nn.Module):
                         num_steps,
                         save_path,
                         batch_size,
-                        timesteps_to_save,
-                        inversion_prompt=''):
+                        timesteps_to_save):
         self.scheduler.set_timesteps(num_steps)
-        cond = self.get_text_embeds(inversion_prompt, "")[1].unsqueeze(0)
+        cond = self.get_text_embeds(self.inversion_prompt, "")[1].unsqueeze(0)
         latent_frames = self.latents
 
         inverted_x = self.ddim_inversion(cond,
@@ -277,13 +290,8 @@ class Preprocess(nn.Module):
                                          batch_size=batch_size,
                                          save_latents=True,
                                          timesteps_to_save=timesteps_to_save)
-        latent_reconstruction = self.ddim_sample(inverted_x, cond, batch_size=batch_size)
-                                                 
-        rgb_reconstruction = self.decode_latents(latent_reconstruction)
 
-        return rgb_reconstruction
-
-
+        
 def prep(opt):
     # timesteps to save
     if opt.sd_version == '2.1':
@@ -295,39 +303,36 @@ def prep(opt):
     elif opt.sd_version == 'depth':
         model_key = "stabilityai/stable-diffusion-2-depth"
     toy_scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler")
-    toy_scheduler.set_timesteps(opt.save_steps)
-    timesteps_to_save, num_inference_steps = get_timesteps(toy_scheduler, num_inference_steps=opt.save_steps,
+    toy_scheduler.set_timesteps(opt.steps)
+    timesteps_to_save, num_inference_steps = get_timesteps(toy_scheduler, num_inference_steps=opt.steps,
                                                            strength=1.0,
                                                            device=device)
-
+    
     seed_everything(1)
 
     save_path = os.path.join(opt.save_dir,
                              f'sd_{opt.sd_version}',
                              Path(opt.data_path).stem,
-                             f'steps_{opt.steps}',
-                             f'nframes_{opt.n_frames}') 
+                             f'steps_{opt.steps}'
+                             ) 
+    model = Preprocess(device, opt)
+    
     os.makedirs(os.path.join(save_path, f'latents'), exist_ok=True)
-    add_dict_to_yaml_file(os.path.join(opt.save_dir, 'inversion_prompts.yaml'), Path(opt.data_path).stem, opt.inversion_prompt)    
+    add_dict_to_yaml_file(os.path.join(opt.save_dir, 'inversion_prompts.yaml'), Path(opt.data_path).stem, model.inversion_prompt)    
     # save inversion prompt in a txt file
     with open(os.path.join(save_path, 'inversion_prompt.txt'), 'w') as f:
-        f.write(opt.inversion_prompt)
-    model = Preprocess(device, opt)
+        f.write(model.inversion_prompt)
+
+    
     recon_frames = model.extract_latents(
                                          num_steps=opt.steps,
                                          save_path=save_path,
                                          batch_size=opt.batch_size,
-                                         timesteps_to_save=timesteps_to_save,
-                                         inversion_prompt=opt.inversion_prompt,
+                                         timesteps_to_save=timesteps_to_save
     )
+    
+    
 
-
-    if not os.path.isdir(os.path.join(save_path, f'frames')):
-        os.mkdir(os.path.join(save_path, f'frames'))
-    for i, frame in enumerate(recon_frames):
-        T.ToPILImage()(frame).save(os.path.join(save_path, f'frames', f'{i:05d}.png'))
-    frames = (recon_frames * 255).to(torch.uint8).cpu().permute(0, 2, 3, 1)
-    write_video(os.path.join(save_path, f'inverted.mp4'), frames, fps=10)
 
 
 if __name__ == "__main__":
@@ -335,20 +340,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', type=str,
                         default='data/woman-running.mp4') 
-    parser.add_argument('--H', type=int, default=512, 
-                        help='for non-square videos, we recommand using 672 x 384 or 384 x 672, aspect ratio 1.75')
-    parser.add_argument('--W', type=int, default=512, 
-                        help='for non-square videos, we recommand using 672 x 384 or 384 x 672, aspect ratio 1.75')
     parser.add_argument('--save_dir', type=str, default='latents')
     parser.add_argument('--sd_version', type=str, default='2.1', choices=['1.5', '2.0', '2.1', 'ControlNet', 'depth'],
                         help="stable diffusion version")
     parser.add_argument('--steps', type=int, default=500)
     parser.add_argument('--batch_size', type=int, default=40)
-    parser.add_argument('--save_steps', type=int, default=50)
-    parser.add_argument('--n_frames', type=int, default=40)
-    parser.add_argument('--inversion_prompt', type=str, default='a woman running')
+    parser.add_argument('--inversion_prompt', type=str, default='')
     opt = parser.parse_args()
     video_path = opt.data_path
-    save_video_frames(video_path, img_size=(opt.W, opt.H))
+    save_video_frames(video_path)
     opt.data_path = os.path.join('data', Path(video_path).stem)
     prep(opt)
