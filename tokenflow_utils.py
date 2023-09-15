@@ -145,16 +145,12 @@ def register_extended_attention_pnp(model, injection_schedule):
             v = self.head_to_batch_dim(v).reshape(n_frames, h, seq_len, head_dim)
 
             out_all = []
+            window_size = 3
             
             for frame in range(n_frames):
                 out = []
                 # sliding window to improve speed.
-                window = []
-                if frame > 0:
-                    window.append(frame-1)
-                window.append(frame)
-                if frame < n_frames - 1:
-                    window.append(frame+1)
+                window = range(max(0, frame-window_size // 2), min(n_frames, frame+window_size//2+1))
                 
                 for j in range(h):
                     sim_all = []
@@ -195,10 +191,8 @@ def register_extended_attention_pnp(model, injection_schedule):
                 k[2 * n_frames:] = k[:n_frames]
 
             out_source = forward_normal(q[:n_frames], k[:n_frames], v[:n_frames])
-            out_uncond = forward_normal(q[n_frames:2 * n_frames], k[n_frames:2 * n_frames], v[n_frames:2 * n_frames])
-            out_cond = forward_normal(q[2 * n_frames:], k[2 * n_frames:], v[2 * n_frames:])
-            # out_uncond = forward_extended(q[n_frames:2 * n_frames], k[n_frames:2 * n_frames], v[n_frames:2 * n_frames])
-            # out_cond = forward_extended(q[2 * n_frames:], k[2 * n_frames:], v[2 * n_frames:])
+            out_uncond = forward_extended(q[n_frames:2 * n_frames], k[n_frames:2 * n_frames], v[n_frames:2 * n_frames])
+            out_cond = forward_extended(q[2 * n_frames:], k[2 * n_frames:], v[2 * n_frames:])
             
             out = torch.cat([out_source, out_uncond, out_cond], dim=0) # (3 * n_frames, seq_len, dim)
 
