@@ -11,7 +11,7 @@ from PIL import Image
 import yaml
 from tqdm import tqdm
 from transformers import logging
-from diffusers import DDIMScheduler, StableDiffusionPipeline
+from diffusers import DDIMScheduler, AutoPipelineForText2Image
 
 from tokenflow_utils import *
 from util import save_video, seed_everything
@@ -20,6 +20,7 @@ from util import save_video, seed_everything
 logging.set_verbosity_error()
 
 VAE_BATCH_SIZE = 10
+cache_dir = None
 
 
 class TokenFlow(nn.Module):
@@ -38,13 +39,15 @@ class TokenFlow(nn.Module):
             model_key = "runwayml/stable-diffusion-v1-5"
         elif sd_version == 'depth':
             model_key = "stabilityai/stable-diffusion-2-depth"
+        elif sd_version == 'XL':
+            model_key = "stabilityai/stable-diffusion-xl-base-1.0"
         else:
             raise ValueError(f'Stable-diffusion version {sd_version} not supported.')
 
         # Create SD models
         print('Loading SD model')
 
-        pipe = StableDiffusionPipeline.from_pretrained(model_key, torch_dtype=torch.float16).to("cuda")
+        pipe = AutoPipelineForText2Image.from_pretrained(model_key, torch_dtype=torch.float16, cache_dir=cache_dir).to("cuda")
         #pipe.enable_xformers_memory_efficient_attention()
         #pipe.load_lora_weights('models/shojovibe_v11.safetensors')
 
@@ -53,7 +56,7 @@ class TokenFlow(nn.Module):
         self.text_encoder = pipe.text_encoder
         self.unet = pipe.unet
 
-        self.scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler")
+        self.scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler", cache_dir=cache_dir)
         self.scheduler.set_timesteps(config["n_timesteps"], device=self.device)
         print('SD model loaded')
 
@@ -267,7 +270,9 @@ class TokenFlow(nn.Module):
         return decoded_latents
 
 
-def run(config):
+def run(config, opt):
+    global cache_dir
+    cache_dir = opt.cache_dir
     seed_everything(config["seed"])
     print(config)
     editor = TokenFlow(config)
@@ -277,6 +282,7 @@ def run(config):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_path', type=str, default='configs/config_pnp.yaml')
+    parser.add_argument('--cache_dir', type=str, default=None)
     opt = parser.parse_args()
     with open(opt.config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -285,8 +291,9 @@ if __name__ == '__main__':
                                              config["prompt"],
                                              str(config["n_timesteps"]),
     )
+    #config["output_path"] = os.path.join(config["output_path"])
     os.makedirs(config["output_path"], exist_ok=True)
     assert os.path.exists(config["data_path"]), "Data path does not exist"
     with open(os.path.join(config["output_path"], "config.yaml"), "w") as f:
         yaml.dump(config, f)
-    run(config)
+    run(config, opt)

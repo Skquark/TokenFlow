@@ -45,31 +45,33 @@ class Preprocess(nn.Module):
             model_key = "runwayml/stable-diffusion-v1-5"
         elif self.sd_version == 'depth':
             model_key = "stabilityai/stable-diffusion-2-depth"
+        elif self.sd_version == 'XL':
+            model_key = "stabilityai/stable-diffusion-xl-base-1.0"
         else:
             raise ValueError(f'Stable-diffusion version {self.sd_version} not supported.')
         self.model_key = model_key
         # Create model
         self.vae = AutoencoderKL.from_pretrained(model_key, subfolder="vae", revision="fp16",
                                                  torch_dtype=torch.float16).to(self.device)
-        self.tokenizer = CLIPTokenizer.from_pretrained(model_key, subfolder="tokenizer")
+        self.tokenizer = CLIPTokenizer.from_pretrained(model_key, subfolder="tokenizer", cache_dir=opt.cache_dir)
         self.text_encoder = CLIPTextModel.from_pretrained(model_key, subfolder="text_encoder", revision="fp16",
-                                                          torch_dtype=torch.float16).to(self.device)
+                                                          torch_dtype=torch.float16, cache_dir=opt.cache_dir).to(self.device)
         self.unet = UNet2DConditionModel.from_pretrained(model_key, subfolder="unet", revision="fp16",
-                                                   torch_dtype=torch.float16).to(self.device)
+                                                   torch_dtype=torch.float16, cache_dir=opt.cache_dir).to(self.device)
         self.paths, self.frames, self.latents = self.get_data(opt.data_path)
         
         if self.sd_version == 'ControlNet':
             from diffusers import ControlNetModel, StableDiffusionControlNetPipeline
-            controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-canny", torch_dtype=torch.float16).to(self.device)
+            controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-canny", torch_dtype=torch.float16, cache_dir=opt.cache_dir).to(self.device)
             control_pipe = StableDiffusionControlNetPipeline.from_pretrained(
-                "runwayml/stable-diffusion-v1-5", controlnet=controlnet, torch_dtype=torch.float16
+                "runwayml/stable-diffusion-v1-5", controlnet=controlnet, torch_dtype=torch.float16, cache_dir=opt.cache_dir
             ).to(self.device)
             self.unet = control_pipe.unet
             self.controlnet = control_pipe.controlnet
             self.canny_cond = self.get_canny_cond()
         elif self.sd_version == 'depth':
             self.depth_maps = self.prepare_depth_maps()
-        self.scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler")
+        self.scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler", cache_dir=opt.cache_dir)
         
         if opt.inversion_prompt:
             self.inversion_prompt = opt.inversion_prompt
@@ -302,7 +304,7 @@ def prep(opt):
         model_key = "runwayml/stable-diffusion-v1-5"
     elif opt.sd_version == 'depth':
         model_key = "stabilityai/stable-diffusion-2-depth"
-    toy_scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler")
+    toy_scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler", cache_dir=opt.cache_dir)
     toy_scheduler.set_timesteps(opt.steps)
     timesteps_to_save, num_inference_steps = get_timesteps(toy_scheduler, num_inference_steps=opt.steps,
                                                            strength=1.0,
@@ -346,6 +348,7 @@ if __name__ == "__main__":
     parser.add_argument('--steps', type=int, default=500)
     parser.add_argument('--batch_size', type=int, default=40)
     parser.add_argument('--inversion_prompt', type=str, default='')
+    parser.add_argument('--cache_dir', type=str, default=None)
     opt = parser.parse_args()
     video_path = opt.data_path
     save_video_frames(video_path)

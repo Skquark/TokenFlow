@@ -9,7 +9,7 @@ from PIL import Image
 import yaml
 from tqdm import tqdm
 from transformers import logging
-from diffusers import DDIMScheduler, StableDiffusionPipeline
+from diffusers import DDIMScheduler, AutoPipelineForText2Image
 import numpy as np
 
 from tokenflow_utils import *
@@ -19,6 +19,7 @@ from util import save_video, seed_everything
 logging.set_verbosity_error()
 
 VAE_BATCH_SIZE = 10
+cache_dir = None
 
 
 # UNET_BATCH_SIZE = 5
@@ -37,13 +38,15 @@ class TokenFlow(nn.Module):
             model_key = "stabilityai/stable-diffusion-2-base"
         elif sd_version == '1.5':
             model_key = "runwayml/stable-diffusion-v1-5"
+        elif sd_version == 'XL':
+            model_key = "stabilityai/stable-diffusion-xl-base-1.0"
         else:
             raise ValueError(f'Stable-diffusion version {sd_version} not supported.')
 
         # Create SD models
         print('Loading SD model')
 
-        pipe = StableDiffusionPipeline.from_pretrained(model_key, torch_dtype=torch.float16).to("cuda")
+        pipe = AutoPipelineForText2Image.from_pretrained(model_key, torch_dtype=torch.float16).to("cuda")
         # pipe.enable_xformers_memory_efficient_attention()
 
         self.vae = pipe.vae
@@ -257,7 +260,9 @@ class TokenFlow(nn.Module):
         return decoded_latents
 
 
-def run(config):
+def run(config, opt):
+    global cache_dir
+    cache_dir = opt.cache_dir
     seed_everything(config["seed"])
     print(config)
     editor = TokenFlow(config)
@@ -267,6 +272,7 @@ def run(config):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_path', type=str, default='configs/config_sdedit.yaml')
+    parser.add_argument('--cache_dir', type=str, default=None)
     opt = parser.parse_args()
     with open(opt.config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -282,4 +288,4 @@ if __name__ == '__main__':
         yaml.dump(config, f)
 
     assert os.path.exists(config["data_path"]), "Data path does not exist"
-    run(config)
+    run(config, opt)
