@@ -56,7 +56,7 @@ class TokenFlow(nn.Module):
         self.text_encoder = pipe.text_encoder
         self.unet = pipe.unet
 
-        self.scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler", cache_dir=cache_dir)
+        self.scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler")
         self.scheduler.set_timesteps(config["n_timesteps"], device=self.device)
         print('SD model loaded')
 
