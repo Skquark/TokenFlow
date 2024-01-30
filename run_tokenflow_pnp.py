@@ -11,7 +11,7 @@ from PIL import Image
 import yaml
 from tqdm import tqdm
 from transformers import logging
-from diffusers import DDIMScheduler, AutoPipelineForText2Image
+from diffusers import DDIMScheduler, StableDiffusionPipeline
 
 from tokenflow_utils import *
 from util import save_video, seed_everything
@@ -46,8 +46,11 @@ class TokenFlow(nn.Module):
 
         # Create SD models
         print('Loading SD model')
-
-        pipe = AutoPipelineForText2Image.from_pretrained(model_key, torch_dtype=torch.float16, cache_dir=cache_dir).to("cuda")
+        if sd_version == 'XL':
+            from diffusers import StableDiffusionXLPipeline
+            pipe = StableDiffusionXLPipeline.from_pretrained(model_key, torch_dtype=torch.float16, cache_dir=cache_dir).to("cuda")
+        else:
+            pipe = StableDiffusionPipeline.from_pretrained(model_key, torch_dtype=torch.float16, cache_dir=cache_dir).to("cuda")
         #pipe.enable_xformers_memory_efficient_attention()
         #pipe.load_lora_weights('models/shojovibe_v11.safetensors')
 

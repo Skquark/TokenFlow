@@ -321,14 +321,14 @@ def prep(opt):
                                                            device=device)
     
     seed_everything(1)
-
-    save_path = os.path.join(opt.save_dir,
+    save_dir = os.path.abspath(opt.save_dir)
+    save_path = os.path.join(save_dir,
                              f'sd_{opt.sd_version}',
                              Path(opt.data_path).stem,
-                             f'steps_{opt.steps}',
-                             f'nframes_{opt.n_frames}') 
-    model = Preprocess(device, opt)
-    
+                             f'steps_{opt.steps}')
+                             #f'nframes_{opt.n_frames}') 
+    #model = Preprocess(device, opt)
+    print(f"save_path: {save_path}")
     os.makedirs(os.path.join(save_path, f'latents'), exist_ok=True)
     add_dict_to_yaml_file(os.path.join(opt.save_dir, 'inversion_prompts.yaml'), Path(opt.data_path).stem, opt.inversion_prompt)    
     # save inversion prompt in a txt file
