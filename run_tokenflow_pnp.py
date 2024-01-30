@@ -63,7 +63,8 @@ class TokenFlow(nn.Module):
         # data
         self.latents_path = self.get_latents_path()
         # load frames
-        self.paths, self.latents, self.eps = self.get_data()
+        self.paths, self.frames, self.latents, self.eps = self.get_data()
+        #self.paths, self.latents, self.eps = self.get_data()
         if self.sd_version == 'depth':
             self.depth_maps = self.prepare_depth_maps()
 
@@ -116,8 +117,18 @@ class TokenFlow(nn.Module):
         return inv_prompt
 
     def get_latents_path(self):
-        return os.path.join(config["latents_path"], f'sd_{config["sd_version"]}',
-                             Path(config["data_path"]).stem, f'steps_{config["n_inversion_steps"]}', 'latents')
+        latents_path = os.path.join(config["latents_path"], f'sd_{config["sd_version"]}',
+                             Path(config["data_path"]).stem, f'steps_{config["n_inversion_steps"]}')
+        latents_path = [x for x in glob.glob(f'{latents_path}/*') if '.' not in Path(x).name]
+        n_frames = [int([x for x in latents_path[i].split('/') if 'nframes' in x][0].split('_')[1]) for i in range(len(latents_path))]
+        latents_path = latents_path[np.argmax(n_frames)]
+        self.config["n_frames"] = min(max(n_frames), config["n_frames"])
+        if self.config["n_frames"] % self.config["batch_size"] != 0:
+            # make n_frames divisible by batch_size
+            self.config["n_frames"] = self.config["n_frames"] - (self.config["n_frames"] % self.config["batch_size"])
+        print("Number of frames: ", self.config["n_frames"])
+        return os.path.join(latents_path, 'latents')
+        #return os.path.join(config["latents_path"], f'sd_{config["sd_version"]}', Path(config["data_path"]).stem, f'steps_{config["n_inversion_steps"]}', 'latents')
 
     @torch.no_grad()
     def get_text_embeds(self, prompt, negative_prompt, batch_size=1):
@@ -159,9 +170,17 @@ class TokenFlow(nn.Module):
 
     
     def get_data(self):
-        frames_path = self.config["data_path"]
+        #frames_path = self.config["data_path"]
         # load frames
-        ext = 'png'
+        paths = [os.path.join(config["data_path"], "%05d.jpg" % idx) for idx in
+                               range(self.config["n_frames"])]
+        if not os.path.exists(paths[0]):
+            paths = [os.path.join(config["data_path"], "%05d.png" % idx) for idx in
+                                   range(self.config["n_frames"])]
+        frames = [Image.open(paths[idx]).convert('RGB') for idx in range(self.config["n_frames"])]
+        if frames[0].size[0] == frames[0].size[1]:
+            frames = [frame.resize((512, 512), resample=Image.Resampling.LANCZOS) for frame in frames]
+        '''ext = 'png'
         first_frame = f"{frames_path}/%05d.png" % 0
         if not os.path.exists(first_frame):
             ext = 'jpg'
@@ -182,7 +201,8 @@ class TokenFlow(nn.Module):
             
         print(f'frames: {len(paths)}, fps: {fps}')
         
-        frames = [Image.open(path).convert('RGB') for path in paths]
+        frames = [Image.open(path).convert('RGB') for path in paths]'''
+        fps = self.config["fps"]
         frames = torch.stack([T.ToTensor()(frame) for frame in frames]).to(torch.float16).to(self.device)
         
         save_video(frames, f'{self.config["output_path"]}/input.mp4', fps=fps)
@@ -190,8 +210,8 @@ class TokenFlow(nn.Module):
         latents = self.encode_imgs(frames, deterministic=True).to(torch.float16).to(self.device)
         # get noise
         eps = self.get_ddim_eps(latents, range(self.config["n_frames"])).to(torch.float16).to(self.device)
-        
-        return paths, latents, eps
+        return paths, frames, latents, eps
+        #return paths, latents, eps
 
     def get_ddim_eps(self, latent, indices):
         noisest = max([int(x.split('_')[-1].split('.')[0]) for x in glob.glob(os.path.join(self.latents_path, f'noisy_latents_*.pt'))])
@@ -249,12 +269,26 @@ class TokenFlow(nn.Module):
         register_conv_injection(self, self.conv_injection_timesteps)
         set_tokenflow(self.unet)
 
+    def save_vae_recon(self):
+        os.makedirs(f'{self.config["output_path"]}/vae_recon', exist_ok=True)
+        decoded = self.decode_latents(self.latents)
+        for i in range(len(decoded)):
+            T.ToPILImage()(decoded[i]).save(f'{self.config["output_path"]}/vae_recon/%05d.png' % i)
+        save_video(decoded, f'{self.config["output_path"]}/vae_recon_10.mp4', fps=10)
+        save_video(decoded, f'{self.config["output_path"]}/vae_recon_20.mp4', fps=20)
+        save_video(decoded, f'{self.config["output_path"]}/vae_recon_30.mp4', fps=30)
+        
     def edit_video(self):
+        os.makedirs(f'{self.config["output_path"]}/img_ode', exist_ok=True)
+        self.save_vae_recon()
         pnp_f_t = int(self.config["n_timesteps"] * self.config["pnp_f_t"])
         pnp_attn_t = int(self.config["n_timesteps"] * self.config["pnp_attn_t"])
         self.init_method(conv_injection_t=pnp_f_t, qk_injection_t=pnp_attn_t)
         noisy_latents = self.scheduler.add_noise(self.latents, self.eps, self.scheduler.timesteps[0])
         edited_frames = self.sample_loop(noisy_latents, torch.arange(self.config["n_frames"]))
+        save_video(edited_frames, f'{self.config["output_path"]}/tokenflow_PnP_fps_10.mp4')
+        save_video(edited_frames, f'{self.config["output_path"]}/tokenflow_PnP_fps_20.mp4', fps=20)
+        save_video(edited_frames, f'{self.config["output_path"]}/tokenflow_PnP_fps_30.mp4', fps=30)
         save_video(edited_frames, f'{self.config["output_path"]}/tokenflow_PnP.mp4', fps=self.config["fps"])
         print('Done!')
 
